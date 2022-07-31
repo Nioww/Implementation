@@ -1,0 +1,130 @@
+import tensorflow as tf
+from tensorflow.keras import Sequential, layers, Model
+import keras.backend as K
+import numpy as np
+
+def SC_Conv(inputs, inchannel, outchannel, ikernel_size, istride, ipadding, iname):
+        
+    ipooling = 2
+    bias_name = iname + '_SC'
+
+
+    out_1 = layers.Conv2D(inchannel/2, 1, strides = 1, name = bias_name + '_d1')(inputs)
+    out_1 = layers.BatchNormalization(name = bias_name + '_d1norm')(out_1)
+
+    out_2 = layers.Conv2D(inchannel - inchannel/2, 1, strides = 1, name = bias_name + '_d2')(inputs)
+    out_2 = layers.BatchNormalization(name = bias_name + '_d2norm')(out_2)
+
+    #sc path
+    identity = out_1
+    out_1b = layers.Conv2D(outchannel/2, ikernel_size, strides = 1, padding = ipadding, name = bias_name + '_k3')(out_1)
+    out_1b = layers.BatchNormalization(name = bias_name + '_k3norm')(out_1b)
+    
+    out_1a = layers.AveragePooling2D(pool_size =ipooling , strides=ipooling, name = bias_name + '_k2pooling')(out_1)
+    #print(out_1a.shape)
+    out_1a = layers.Conv2D(outchannel/2, ikernel_size, strides = 1, padding = ipadding, name = bias_name + '_k2')(out_1a)
+    out_1a = layers.BatchNormalization(name = bias_name + '_k2norm')(out_1a)
+    #out_1a = layers.UpSampling2D(size=(2, 2))(out_1a)
+    out_1a = tf.image.resize(out_1a,size = [tf.shape(identity)[1],tf.shape(identity)[2]])
+    #print(out_1a.shape,identity.shape)
+   
+    out_1a = (layers.add([identity,out_1a]))
+    out_1a = layers.Activation('sigmoid')(out_1a)
+    
+    out_1 = layers.Multiply()([out_1a,out_1b])
+    out_1 = layers.Conv2D(outchannel/2,ikernel_size,strides = istride, padding = ipadding, name = bias_name + '_k4')(out_1)
+    out_1 = layers.BatchNormalization(name = bias_name + '_k4norm')(out_1)
+
+    #normal path
+    out_2 = layers.Conv2D(outchannel - outchannel/2, ikernel_size, strides = istride, padding = ipadding, name = bias_name + '_k1')(out_2)
+    out_2 = layers.BatchNormalization(name = bias_name + '_k1norm')(out_2)
+
+        
+    return K.concatenate([out_1,out_2],axis = 0)
+
+def identity_block(inputs, outchannels, iname):
+        
+    ifilters = outchannels
+    bias_name = iname
+        
+
+    residual = inputs
+        
+     
+    out = layers.Conv2D(ifilters[0],1,1,name = bias_name + '_1')(inputs)
+    out = layers.BatchNormalization(name = bias_name + '_1norm')(out)
+    out = layers.Activation('relu')(out)
+
+    out = SC_Conv(out, ifilters[0], ifilters[1],3,1,ipadding = 'same',iname = bias_name + '_2')
+    out = layers.BatchNormalization(name = bias_name + '_2norm')(out)
+    out = layers.Activation('relu')(out)
+
+    out = layers.Conv2D(ifilters[2],1,1,name = bias_name + '_3')(out)
+    out = layers.BatchNormalization(name = bias_name + '_3norm')(out)
+    out = layers.add([out,residual])
+    out = layers.Activation('relu')(out)
+        
+    return out
+
+def conv_block(inputs, outchannels, strides, iname):
+        
+    ifilters = outchannels
+    bias_name = iname
+        
+    residual = inputs
+
+    out = layers.Conv2D(ifilters[0],1, strides, padding = 'same', name = bias_name + '_1')(inputs)
+    out = layers.BatchNormalization(name = bias_name + '_1norm')(out)
+    out = layers.Activation('relu')(out)
+        
+    out = SC_Conv(out, ifilters[0],ifilters[1],3,1,ipadding = 'same',iname = bias_name + '_2')
+    out = layers.BatchNormalization(name = bias_name + '_2norm')(out)
+    out = layers.Activation('relu')(out)
+
+    residual =layers.Conv2D(ifilters[2],1, strides, padding = 'same', name = bias_name + '_R')(residual)
+    residual =layers.BatchNormalization(name = bias_name + '_Rnorm')(residual)
+
+    out = layers.Conv2D(ifilters[2],1,1,name = bias_name + '_3')(out)
+    out = layers.BatchNormalization(name = bias_name + '_3norm')(out)
+    
+    out = layers.add([out,residual])
+    out = layers.Activation('relu')(out)
+        
+    return out
+
+def SCNet50(num_class,input_shape=(256, 256, 3)):  
+    inputs = layers.Input(shape=input_shape)
+    
+    out = layers.Conv2D(64, 7, 2, padding='same', name = 'conv1', input_shape = input_shape)(inputs)
+    out = layers.BatchNormalization(name = 'norm1')(out)
+    out = layers.Activation('relu')(out)
+
+    out = layers.MaxPooling2D(pool_size=3, strides=2, name='pool1')(out)
+    
+    out = conv_block(out,[64, 64, 256],1,'conv_block1')
+    out = identity_block(out,[64, 64, 256],'id_block1_1')
+    out = identity_block(out,[64, 64, 256],'id_block1_2')
+        
+    
+    out = conv_block(out,[128, 128, 512],2,'conv_block2')
+    out = identity_block(out,[128, 128, 512],'id_block2_1')
+    out = identity_block(out,[128, 128, 512],'id_block2_2')
+    out = identity_block(out,[128, 128, 512],'id_block2_3')
+
+
+    out = conv_block(out,[256, 256, 1024],2,'conv_block3')
+    out = identity_block(out,[256, 256, 1024],'id_block3_1')
+    out = identity_block(out,[256, 256, 1024],'id_block3_2')
+    out = identity_block(out,[256, 256, 1024],'id_block3_3')
+    out = identity_block(out,[256, 256, 1024],'id_block3_4')
+    out = identity_block(out,[256, 256, 1024],'id_block3_5')
+
+    out = conv_block(out,[512, 512, 2048],2,'conv_block4')
+    out = identity_block(out,[512, 512, 2048],'id_block4_1')
+    out = identity_block(out,[512, 512, 2048],'id_block4_2')
+
+    out = layers.GlobalAveragePooling2D(name='avg_pool')(out)
+    out = layers.Dropout(0.5)(out)
+    out = layers.Dense(num_class, activation='softmax')(out)
+    model = Model(inputs=inputs, outputs=out, name="SCNet50")
+    return model
